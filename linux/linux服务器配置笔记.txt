@@ -1,0 +1,1486 @@
+ 1、关闭seLinux
+sed  -i 's#SELINUX=enforcing#SELINUX=disabled#gp' /etc/selinux/config
+setenforce 0  临时生效
+2、关闭防火墙
+/etc/init.d/iptables  stop
+/etc/init.d/iptables  stop
+chkconfig iptables off
+3、关闭不应该启动的服务
+ chkconfig --list|grep -Ev 'crond|sshd|network|rsyslog|sysstat'|awk '{print "chkconfig",$1,"off"}'|bash
+
+4、为用户添加sudo权限
+useradd lijinpeng
+cp /etc/sudoers /etc/sudoers.ori
+echo "lijinpeng ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+tail -1 /etc/sudoers
+visudo -c  //检查语法
+
+5、中文字符集
+
+cp /etc/sysconfig/i18n  /etc/sysconfig/i18n.ori
+echo 'LANG="zh_CN.UTF-8"' >/etc/sysconfig/i18n 
+source /etc/sysconfig/i18n  
+echo $LANG
+
+6、时间同步
+echo '#time sync by lijinpeng at 2017-05-01' >>/var/spool/cron>root
+echo '*/5 * * * * /usr/sbin/ntpdate time.nist.gov > /dev/null 2>&1' >>/var/spool/cron>root
+crontab -l
+
+7、命令行安全
+echo 'export TMOUT=300' >> /etc/profile
+echo 'export HISTSIZE=5' >>/etc/profile
+echo 'export HISTFILESIZE=5'>>/etc/profile
+tail -3 /etc/profile
+
+8、加大文件描述
+echo ‘*                       -             nofile       65535’>>/etc/security/limits.conf
+tail -1 /etc/security/limits.conf
+
+9、内核优化
+cat >> /etc/sysctl.conf<<EOF
+net.ipv4.tcp_fin_timeout=2
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_tw_recycle=1
+net.ipv4.tcp_syncookies=1
+net.ipv4.tcp_keepalive_time=600
+net.ipv4.ip_local_port_range=4000 65000
+net.ipv4.tcp_max_syn_backlog=16384
+net.ipv4.tcp_max_tw_buckets=36000
+net.ipv4.route.gc_timeout=100
+net.ipv4.tcp_syn_retires=1
+net.ipv4.tcp_synack_retries=1
+net.core.somaxconn=16384
+net.core.netdev_max_backlog=16384
+net.ipv4.tcp_max_orphans=16348
+EOF
+#以下参数是对iptables防火墙的优化 防火墙不开会提示  可 忽略 不理
+net.nf_conntrack_max=25000000
+net.netfilter.nf_conntrack_tcp_timeout_established=180
+net.netfilter.nf_conntrack_tcp_timeout_time_wait=120
+net.netfilter.nf_conntrack_tcp_timeout_close_wait=60
+net.netfilter.nf_conntrack_tcp_timeout_fin_wait=120
+
+
+
+备份服务器 rsync
+查看版本： rsync --version
+
+项目经验  365
+
+
+使用 -a 拷贝所有 
+
+     -vzrtopg 拷贝文件属性  =-avz
+     -avz delete  文件  本地必须没有 之后 才可以在远端删除  这个命令 少用
+ 案例;某DBA做数据同步 带宽占满了  导致用户无法访问网站了。
+
+ 模拟案例：
+创建备份文件
+dd if=/dev/zero of=test1 bs=1M count=128
+
+限速的 参数 --bwlimit=100K
+
+  
+
+配置backup 备份服务器过程
+01配置文件
+vim rsyncd.conf  默认文件不存在的
+
+向文件里面添加 配置  /etc/rsync.conf
+#this is my config for rsync  
+#config is started
+#用户  远端的命令使用rsync这个用户访问共享目录
+uid=rsync
+#用户组
+gid=rsync
+#安全相关
+use chroot=no
+#最大连接数
+max connections=200
+#超时时间
+timeout=300
+#进程文件
+pid file=/var/run/rsyncd.pid
+#锁文件
+lock file=/var/run/rsyncd.lock
+#日志文件 错误信息
+log file=/var/run/rsyncd.log
+#模块名
+[backup]
+#共享文件目录
+path=/backup
+#忽略错误
+ignore errors
+#可读可写
+read only=false
+#不能使用ls 等显示列表的命令
+list=false
+#主机访问的网络号
+hosts alow=172.16.1.0/24
+#拒绝访问的注解段位
+hosts deny=0.0.0.0/32
+auth users=rsync_backup
+secrets file=/etc/rsync.password
+#config is end
+
+02新建rsync用户
+
+useradd -s /sbin/nologin -M 
+03 启动服务
+rsync --daemon
+
+
+---- 加入开机自启动
+echo '/usr/bin/rsync --daemon'>>/etc/rc.locl
+
+04 查看是否启动服务
+
+ps -ef|grep rsync|grep -v grep
+
+05 创建backup目录
+
+mkdir /backup
+
+06 为backup分配权限
+chown -R rsync.rsync /backup/
+07创建密码文件
+touch /etc/rsync.password  
+echo 'rsync_backup:oldboy'
+08为密码文件分配权限
+chmod 600 /etc/rsync.password
+09用已知端口查看服务
+lsof  -i:873
+或者  netstat -lntup|grep 873
+
+
+客户端配置   现在和服务端一样
+01
+
+客户端的密码文件 只有密码
+
+echo 'oldboy' >>/etc/rsync.password
+
+设置权限（600）
+chomd 600 /etc/rsync.password  
+
+02 模拟数据
+创建 /backup 目录
+mkdir -p /backup
+创建数据
+touch stu{1..100}.txt
+
+03 把数据推送到备份服务器
+方式1：rsync -avz /services/ rsync_backup@172.16.1.41 /backup  --password-file=/etc/rsync.password 
+方式2：rsync -avz /services/ rsync://rsync_backup@172.16.1.41:873/backup  --password-file=/etc/rsync.password 
+
+
+#######服务端配置文件配置模块#############
+可以配置多个模块  可以抽出公共变量
+
+auto users=rsync_backup 是一个虚拟用户   可以随便指定
+
+模块内的内容基本上都可以实现定制化配置
+
+--exclude 排除文件  --exclude a  排除a文件  --exclude  {a,b} 排除a  b  文件
+
+--delete 差异化同步 只同步本地的数据 如果服务端存在和服务端不同 则删除服务端不同的文件
+
+  很危险
+
+案例： 视频网站  视频推到服务器上线发布  本地/backup 只有当天发布的内容  服务器上确有以前的所有
+       使用--delete 删除了服务端所有以前的了，
+
+rsync 三种工作模式
+1、local:rsync(cp,rm)
+2、通道模式
+rsync -avzP -e 'ssh -p 22' /etc root@10.0.0.142:/tmp
+3daemon模式
+内网不需要  加密性能有损失
+rsync+vpn(pptp,openvpn,ipsec)
+
+rsync 原理
+
+rsync 优缺点
+
+
+全网数据备份 
+
+
+课后习题的 思路
+
+第一步：在备份服务器上 配置 备份的 环境module
+        为环境设置的虚拟用户 配置密码
+
+第二步：编写脚本  脚本里面包括 删除备份目录下七天以前的文件   设置时间变量  把要备份的数据推送到备份服务器的命令  
+
+        编写定时任务
+
+
+########搭建NFS 服务器
+
+1 创建一台web服务器  web01  172.16.1.8
+
+修改主机名 
+hostname web01
+/etc/sysconfig/network  
+修改主机映射文件 /etc/hosts
+172.16.1.5 1b01
+172.16.1.6 1b02
+172.16.1.7 web02
+172.16.1.8 web01
+172.16.1.51 db01 db01.etiantian.org
+172.16.1.31 nfs01
+172.16.1.41 backup
+172.16.1.61 m01
+
+
+实时备份
+
+企业项目案例
+1、集权分治的权限管理及日志审计
+
+2、全网数据备份解决方案
+
+3、共享存储实时备份（共享存储的单点解决方案）
+第一个里程碑：
+a.实现从nfs客户端到rsync服务的部署
+第二个里程碑
+b.实现从nfs客户端对nfs目录文件系统事件的实时监控
+第三个里程碑
+c.当监控到nfs目录文件系统事件变化后，触发rsync推送变化的文件
+
+脚本实现
+
+
+       crond+rsync
+NFS存储  →   backup备份  rasync daemon 服务
+inotify
+sersync
+lrsyncd
+监控磁盘文件系统的变化
+
+实例：rsync -avz /data/rsnc_backup@172.16.1.41:backup --password-file=/etc/rsync.password
+
+查看服务是否启动
+ps -ef |grep rsync
+lsof -i:873
+编辑 /etc/exprots 文件  新建一个  模块 
+关闭进程 重新启动服务
+pkill 873
+rsync -daemon 
+
+限制带宽传输  rsync -avz --bwlimit=10 /backup rsync_backup@172.16.1.41::backup --password-file=/etc/rsync.password
+
+
+安装inotify 
+ 
+查看是否安装
+
+rpm -qa inotyfy-tools 
+
+安装
+第一步： wget -O /etc/yum.repos.d/epel.repo http:mirrors.aliyun.com/repo/epel-6.repo 
+第二步：yum install inotify-tools -y
+
+检查是否安装:rpm -qa inotify-tools
+
+一共安装了2个命令工具：inotifywait 
+
+which inoyifywait 查看命令在那个目录下
+
+inotifywait --help 查看帮助
+监控/backup 目录 内 文件的创建和删除
+inotifywait -mrq --timefmt '%d/%m/%y %H:%M' --format '%T %w%f' -e create /data
+将监控到的文件变化 通过rsync 备份到远程服务
+
+脚本执行：
+
+Path=/data
+Ip=172.16.1.41
+#watch /data  dir change
+inotifywait -mrq --timefmt '%d/%m/%y %H:%M' --format '%T %w%f' -e close_write,delete,create $Path \
+|while read file
+do
+cd $Path && \
+rsync -avz  /data/* --delete rsync_backup@$Ip::nfs_backup/ --password-file=/root/backup/backup.password
+done
+
+监控目录的变化:watch  ls
+
+至此  基本配置 测试完成
+可以借助rsync+inotify 做数据实时同步即可
+比较重要的三个参数: /proc/syc/fs/inotify/ 目录下
+设置通过echo 设置就可以了。 
+重启会失效  所以放置到 rc.local 里面
+
+
+高并发数据实时同步方案小结
+1、inotify(sersync)+rsync 是文件级别的
+2、drbd文件系统级别，基于block块同步 缺点：备份节点数据不可用
+3、第三方软件同步功能:mysql同步 oracle  mongodb
+4、程序双写 直接写两台服务器
+5、利用产品业务逻辑解决 读写分离， 备读不到，读主
+6、NFS集群  双写主存储  备存储用inotify（sersync）+rsync，备没有 找主 解决延迟问题。
+
+课后作业
+
+1、nfs深度实践及优化
+2、nfs实时同步方案
+   a、rsync+inotify
+   b、sersync+rsync
+3、数据同步方案  6种方案
+
+发送邮件:
+
+mail -s "标题"  用户< 日志内容路径  
+
+exportfs -arv 重新加载nfs 设置
+
+搭建SSH服务器
+
+克隆一台服务器ip 172.16.1.61
+
+设置主机名 hostname
+
+优化
+
+设置ip地址
+
+    远程链接 加密服务
+检查openssh  openssl 是否安装
+
+rpm -qa openssh openssl
+
+编辑ssh的配置文件
+vim /etc/ssh/ssh_config
+
+更改ssh默认登陆配置
+ 1、编辑/etc/passwd ，注释掉一些无用的用户
+ 2、编辑/etc/ssh/ssh_config
+    Port=52113
+    ListenAdress 172.16.1.61:52113  暂时不配置
+    Protocol 2
+    PermitRootLogin no
+    PermitEmptypasswords no 不允许空密码登陆
+    #GSSAPIsTRUCAutjentication  no  影响连接速度
+    UseDNS no   影响连接速度
+
+sed -i '138i Port 9527 \nGSSAPIAuthentication no\n UseDNS no\nPermitEmptyPasswords no\nPermitRootLogin no' sshd_config 
+
+快捷操作命令: 
+3、平滑重启:/etc/init.d/sshd reload
+
+4、再次链接:ssh -p52113 10.0.0.61
+
+5、新建立一个用户
+useradd ssh_user 
+echo '123456'|passwd --stdin ssh_user
+
+ssh基本语法使用
+ssh -pport username@ip
+
+拷贝文件到远程 scp命令
+推送：
+scp -pPort 本地目录 用户@ip 远程目录
+
+补命令:watch 周期性执行程序 打印到目录 默认是每隔2秒执行一次
+       ssh  linux远程连接命令
+       scp 远程拷贝目录 -P 端口 -r 目录 -p保持属性
+ssh相关命令
+sftps命令   
+
+批量管理
+
+1、所有创建用户及密码
+useradd oldgril
+修改密码
+echo '123456'|passwd --stdin oldgril
+查看用户
+id oldgril
+切换用户
+su -oldgril
+
+在管理机上创建密钥对
+ssh-key 显示
+使用 ssh-keygen
+ssh-keygen -t dsa  一路回车
+1非交互式创建密钥 ssh-keygen -t dsa -P '' -f ~/.ssh/id_dsa>/dev/null 2>&!
+2 echo -e "\n"|ssh-keygen -t dsa -N ""
+管理系发送公钥到所有机器
+查看命令 ssh
+默认端口
+ssh-copy-id -i .ssh/id_dsa.pub oldgril@172.16.1.41
+指定端口
+ssh-copy-id -i .ssh/id_dsa.pub "-p9527 ssh_user@172.16.1.8"  
+
+测试
+
+连接所有机器 不提示密码 ssh -p22 oldgril@172.16.1.31 
+
+企业实现ssh方案
+1、直接root  ssh  key
+条件:允许root ssh 登陆
+
+
+2、sudo提权实现没有权限用户的拷贝/etc.sudoers    visudo
+
+1、备份: cp  /etc/sudoers  /etc/sudoers.ori
+2、添加权限
+oldgril ALL=(ALL) NOPASSWD: /usr/bin/rsync
+
+01自动化执行:echo 'oldgril ALL=(ALL) NOPASSWD: /usr/bin/rsync'>>/etc.sudoers
+
+02 visudo -c检查语法
+
+ 将管理机器的ssh_user目录下的hosts文件拷贝到 目的机器   
+ 然后将目的机器ssh_user用户下的 hosts文件 推送到 目的机器的/etc/hosts目录下
+ scp -P52113 hosts oldgirl@IP:~远程拷贝  与次操作无关。
+ ssh -p52113 -t oldgirl@IP sudo rsync ~/hosts /etc/hosts
+
+隧道模式 推送文件
+rsync -avz 目标文件 -e 'ssh -p 52113' oldgril@172.16.1.41:~
+3\利用suid实现没有权限用户的拷贝(做思维扩展了解)
+chmod u+s '命令
+
+
+
+关于 scp  如果是对于增量 拷贝 就不好做到 。所以我们可以使用rsync 的通道模式
+
+ rsync -avz hosts  -e 'ssh -p 9527' ssh_user@172.16.1.31:~
+
+ -e 表示 的是 使用ssh 登陆的方式
+
+
+export  安装到管理机器上
+
+检查是否安装 rpm -qa export 
+
+安装 yum  install export -y
+
+mkpasswd 生成随机字符串  可以制定长度 -1 100
+
+非交互式生成密钥及实现批量管理
+1、所有机器创建用户
+useradd oldgril1888
+设置密码
+echo '123456' |passwd --stdin oldgril1888
+切换用户
+su - oldgril1888
+2、一键创建密钥
+ssh-keygen -t dsa -P '' -f ~/.ssh/id_dsa>/dev/null 2>&!
+
+
+
+一键自动化 生成密钥  分发密钥  执行操作
+
+1、创建用户  useradd ssh_user   echo "123456"|passwd --stdin ssh_user
+2、管理机上 创建 密钥  : echo -e "\n"|ssh-keygen -t dsa -N ""
+3、编写脚本expect 分发 密钥   
+#！/usr/bin/expect
+if { $argc !=2 } {
+send_user "usage:in the command ssh-expect ,you must user two paramter!\n"
+
+exit
+
+}
+
+#define var 
+
+set file [lindex $argv 0]
+
+set host [lindex $argv 1]
+
+#set dir  [lindex $argv 2]
+
+set password "123456"
+#spawn scp /etc/hosts root@10.0.0.142:/ect/hosts
+#spawn scp -P9527 $file  ssh_user@$host:$dir
+
+spawn ssh-copy-id -i $file "-p 9527 ssh_user@$host"
+
+expect {
+
+"yes/no" {send "yes\r";exp_continue}
+
+"*password" {send "$password\r"}
+
+}
+expect eof
+
+exit -onexit {
+
+  send_user "this command is end! ssh_expect_user say byte to you \n"
+}
+
+
+
+#script usage
+#expect oldboy-6.exp file host dir
+#example
+
+
+4、编写脚本 ssh04.sh 管理执行流程
+#set var
+port=9527
+ip=172.16.1
+user=ssh_user
+#manager roobot  create  pubkey 
+echo -e "\n"|ssh-keygen -t dsa -N ""
+#分发公钥到各自机器上
+. /etc/init.d/functions
+for n in 8 31
+do
+#fen fa  pubkey
+echo "====================$ip.$n==========================="
+expect ssh_expect.exp /home/ssh_user/.ssh/id_dsa.pub  $ip.$n
+if [ $? -eq 0 ];
+then
+action "$ip.$n operate is ok!" /bin/true
+else
+action "$ip.$n operate is fail!" /bin/false
+fi
+done
+
+
+##################
+saltsatck
+
+安装 saltstack
+
+查看是否安装yum源
+cd /etc/yum.repos.d/ 
+
+ls
+
+安装epel源
+EPEL (Extra Packages for Enterprise Linux)是基于Fedora的一个项目，为“红帽系”的操作系统提供额外的软件包，适用于RHEL、CentOS和Scientific Linux.
+
+ yum install epel-release -y
+安装 salstact(安装在管理机)
+yum install salt-master -y  
+安装minion（安装在被管理的机器上）
+yum install salt-minion - y
+
+添加开机自启动
+
+chkconfig salt-master on
+
+修改master文件
+
+vim /etc/salt/master
+
+搜索/file_roots  
+
+将 注释打开   一定要保留 有空格 2 第一行 两个空格  第二行 四个空格
+
+搜索pillar_roots:   注释打开  要求一样， 
+
+
+启动下  /etc/init.d/salt-master start
+
+
+vim /etc/salt/minion 
+
+
+master：172.16.1.61(改成自己的管理机的ip)
+
+id:nfs
+
+查看命令
+salt-key 
+
+salt "*" cmd.run 'df -h'
+
+
+新建文件夹: mkdir /srv/{salt,pillar}
+
+新建脚本 host_file.sls
+/etc/hosts:
+  file.managed:
+    - source: salt://files/hosts
+    - user: root
+    - group: root
+    - mode: 644
+
+新建文件夹:mkdir /srv/salt/files
+拷贝主机文件到 files文件夹  cp /etc/hosts files/hosts
+
+执行: salt ‘*’ state.sls  host_file
+
+查看主机 即可
+
+
+
+查看机器的 定时任务
+
+ salt '*'  cron.list_tab root
+
+
+定时任务脚本:
+
+
+/usr/sbin/ntpdate times.aliyun.com >>/dev/null:
+
+  cron.present:
+    - user: root
+    - minute: '*/5'
+    - hour: 10
+    - daymonth: 13
+
+
+删除定时任务脚本:
+/usr/sbin/ntpdate times.aliyun.com >>/dev/null:
+  cron.absent:
+    - name: /usr/sbin/ntpdate times.aliyun.com >>/dev/null
+
+
+查看方法帮助； salt '* '  sys.doc 'test'
+
+
+#salt '*' state.highstate  
+
+
+##################http服务#########################
+
+企业面试题
+1、请说出http协议的 原理
+2、描述下 用户请求的过程
+
+用户访问网站的流程
+1、用户访问网站的流程框架
+2、DNS解析原理
+3、TCP/IP的三次握手原理
+4、http协议原理（www服务的请求过程）
+5、大规模网站集群架构细节
+6、http协议原理（www响应过程）响应报文细节！
+7、tcp/ip四次挥手过程原理！
+
+查看dns解析的工具
+
+dig     dig +trace www.etiantian.com
+ 
+nslookup
+
+Nginx Web服务器
+
+linux 里面软件的安装方法
+
+1、rpm -ivh 包名.rpm
+   有依赖问题，比如安装B 需要先安装A ， 
+   缺点:不能定制 
+2、yum安装 解决rmp安装的依赖问题，安装更简单化。  
+   优点:简单易用 
+   缺点:不能定制 
+
+3、编译（C语言源码  编译二进制等）
+ 
+  ./configure(配置)  make（编译） make install(安装)
+  
+   优点：可以定制
+   缺点：复杂、效率低
+
+4、订制化制作rmp包  搭建yum仓库  把我定制的rpm包放到yum仓库  进行yum 安装
+    
+  优点：结合了2 、3 的有点
+  缺点：复杂
+
+
+安装Nginx
+ 
+1、先安装 pcre库  安装 openssl-devel
+
+  yum install pcre pcre-devel -y
+
+  yum install openssl openssl-devel -y
+
+2、下载nginx
+
+ wget -q https://nginx.org/download/nginx-1.6.3.tar.gz
+
+ 创建用户： useradd www -s /sbin/nologin -M
+
+ 解压
+
+ tar xf nginx-1.6.3.tar.gz
+
+
+ 配置
+ 
+ ./configure --user=www --group=www --with-http_ssl_module --with-http_stub_status_module --prefix=/application/nginx-1.6.3/
+
+编译&&安装
+
+make  &&  make install
+
+添加个软链  方便操作
+
+ln -s /application/nginx-1.6.3/  /application/nginx
+
+
+3、启动
+
+ /application/nginx/sbin/nginx 
+
+ 查看是否启动
+ netstat -lntup |grep nginx
+ 查看端口
+ lsof -i:80  
+
+浏览器输入:10.0.0.8 查看是否出现界面
+
+初始化 安装包
+
+yum grouplist 可以查看预装的软件。
+
+补装软件
+yum group install "应用名字"
+
+
+
+配置:
+
+1、打开nginx的配置路径 
+
+cd /application/nginx/conf
+
+#查询空格和注释（去掉空格）
+egrep -v '^$|#' nginx.conf.default>nginx.conf
+
+2、配置server{
+
+ listen  80;
+server_name  www.etiantian.org;//修改域名
+location /{
+root html;
+index index.html  index.htm;
+
+}
+
+}
+
+检查语法
+
+/application/nginx/sbin/nginx -t
+
+
+平滑重启
+
+/application/nginx/sbin/nginx -s reload
+
+
+做域名解析  /etc/hosts
+
+10.0.0.8  www.etiantian.org
+
+
+虚拟主机
+
+a、基于域名的虚拟主机  通过域名来区分虚拟主机
+
+===》应用：外部网站*****
+worker_processes  1;
+events {
+    worker_connections  1024;
+}
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+    server {
+        listen       80;
+        server_name  www.alivn.com;
+        location / {
+            root   html/www;
+            index  index.html index.htm;
+        }
+    }  
+  
+    server {
+        listen       80;
+        server_name  www.lijinpeng.com;
+        location / {
+            root   html/bbs;
+            index  index.html index.htm;
+        }
+    }
+}
+
+
+创建网站文件夹  mkdir  ../html/{www,bbs}  -p
+
+创建文件 echo "www" >>/html/www/index.html
+
+创建文件 echo "bbs" >>/html/bbs/index.html
+
+检查语法
+
+/application/nginx/sbin/nginx -t
+
+平滑重启
+
+/application/nginx/sbin/nginx -s reload
+
+b、基于端口的虚拟主机，通过端口来区分虚拟主机
+
+===》应用:公司内部网站，网站的后台***
+
+a  b  实例  
+
+server {
+        listen       80;
+        server_name  www.alivn.com;
+        location / {
+            root   html;
+            index  index.html index.htm;
+        }
+    }
+
+    server {
+        listen       80;
+        server_name  www.cctv.com;
+        location / {
+            root   html/CCTV; 
+            index  login.html;
+        }   
+    }       
+   server {
+        listen       443;
+        server_name  www.alivn.com;
+        location / {
+            root   html/alivn;
+            index  login.html;
+        }
+    }
+
+在另一台机器的/etc/hosts配置域名解析
+
+10.0.0.8 www.alivn.com www.cctv.com
+
+访问：curl www.alivn.com    
+      curl www.alivn.com:443
+      curl www.cctv.com
+
+
+c、基于IP的虚拟主机，几乎不用，不支持iconfig别名，配置文件可以。
+
+===》几乎不用
+
+分配网卡
+1、ifconfig eth0:0 10.0.0.101/24 up
+2、ip addr add 10.0.0.102/24 dev eth0 label eth0:1
+
+curl  -I  www.baidu.com  //可以查看详细请求信息
+
+可以为域名做别名：  server-name  www.alivn.com  alivn.com
+
+curl www.alivn.com       curl alivn.com
+
+
+Nginx状态(新增)
+
+location /{
+stub_status on;
+access_loh  off;
+
+}
+
+可以将物理机器 的 ip映射为 虚拟机IP  
+
+编辑 2     NAT
+
+
+配置错误日志
+
+error_log   路径
+
+可以放在全局  与http 同列
+
+
+定义日志格式
+
+在http 中 定义
+
+log_ormat main '$remote_addr-$remote_user';
+
+
+使用：
+
+error_log  errorLogs/error_mesg
+
+
+安装mysql
+
+先安装  yum install -y perl-Module-Install.noarch
+
+在安装   yum install -y libaio 
+
+创建mysql用户
+groupadd mysql
+useradd -s /sbin/nologin  -g myql -M mysql
+检查用户
+id myql
+下载mysql安装包
+wget http://dev.mysql.com/get/Downloads/MySQL-5.6/mysql-5.6.30-linux-glibc2.5-x86_64.tar.gz
+解压
+tar -vxf mysql-5.6.30-linux-glibc2.5-x86_64.tar.gz
+
+拷贝到/applications/mysql-5.6.30目录下
+
+cp -a mysql-5.6.30-linux-glibc2.5-x86_64 /applications/mysql-5.6.30
+
+创建软链接
+
+cd /applications/
+ln -s mysql-5.6.30/ mysql
+
+分配用户
+
+chown -R mysql.mysql  mysql
+
+初始化my.cnf
+
+/bin/cp my-default.cnf  /etc/my.cnf
+
+初始化mysql数据库文件
+
+/applications/mysql/scripts/mysql_install_db  --basedir=/applications/mysql --datadir=/applications/mysql/data --user=mysql
+
+/etc/my.cnf 添加
+
+sed  -i '5i basedir=/applications/mysql \ndatadir=/applications/mysql/data' /etc/my.cnf 
+
+配置启动脚本（这一步总是 存在问题 暂时不用）
+
+cp support-files/mysql.server  /etc/init.d/mysqld
+
+因为myql默认暗转路径在 /usr/local/ 而我们移动了 /application/下 所以要做一个替换
+
+sed -i 's#/usr/local#/applications#gp' /etc/init.d/mysqld  /applications/mysql/bin/mysqld 
+
+开启
+
+/applications/mysql/bin/mysqld  --user=root
+
+配置全局变量 实现在任意路径下  通过访问mysql 进入数据库
+
+ echo 'PATH=/applications/mysql/bin:$PATH' >>/etc/profile
+  
+生效
+
+source /etc/profile
+
+进入数据库 
+
+mysql
+
+即可
+
+为root用户设置用户名
+
+ mysqladmin -uroot password 'bestpay'
+
+登陆
+  mysql -uroot -pbestpay
+
+至此 mysql 安装已经完成。 下面是迁移数据
+
+在原数据库中生成脚本
+
+mysqldump -uroot -pbestpay wordpress -B>>wordpress.sql
+
+在新数据库中 导入脚本
+mysql -uroot -pbestpay <wordpress.sql 
+
+新建用户  并授权
+
+grant all on wordpress to wordpress@'172.16.1.%' identified by 'bestpay';
+授权远程用户 所有权限
+
+grant all privileges on *.* to 'root'@'%'identified by '123456' with grant option;
+flush privileges ;
+
+查看用户
+
+select user from mysql.user;
+
+查看授权
+
+show grants for wordpress@'172.16.1.%';
+
+使授权生效
+
+flush privileges;
+
+
+修改nginx服务wordpress的链接程序
+
+wp-config.php
+
+/** MySQL主机 */
+define('DB_HOST', '172.16.1.51');
+
+关闭原服务器
+
+启动新服务器即可
+
+
+解压
+
+安装php
+
+1、检查 PHP 所需要的库
+
+rpm -qa zlib-devel libxml2-devel libjpeg-turbo-devel libiconv-devel
+rpm -qa freetype-devel libpng-devel gd-devel libcurl-devel libxslt-devel
+
+安装
+
+yum install zlib-devel libxml2-devel  libjpeg-turbo-devel libiconv-devel -y
+yum install freetype-devel libpng-devel gd-devel libcurl-devel libxslt-devel -y
+
+由于yum源中无libiconv库  所以需要手动 编译安装
+
+wget http://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.14.tar.gz
+
+tar -vxf libiconv-1.14.tar.gz
+./configure --prefix=/usr/local/libiconv
+make && make install
+
+安装 libmcrypt 
+
+Centos默认的yum 源 里面有libmcryot-devel 。需要事先配置epel 源
+
+wget -O /etc/yum.repos/epel.repo http://mirrors.aliyun.com/repo/epel.repo
+
+可以使用yum 安装了
+
+yum install libmcrypt-devel
+
+安装mhash加密扩展库
+
+yum install mhash -y
+
+安装mcrypt
+
+yum install mcrypt -y
+
+下载php安装包
+wget http://mirrors.sohu.com/php/php-5.4.27.tar.gz
+
+解压
+ tar -vxf php-5.4.27.tar.gz 
+
+设置编译参数
+
+./configure \
+--prefix=/application/php5.3.27 \
+--with-mysql=/application/mysql \
+--with-iconv-dir=/usr/local/libiconv \
+--with-freetype-dir \
+--with-jpeg-dir \
+--with-png-dir \
+--with-zlib \
+--with-libxml-dir=/usr \
+--enable-xml \
+--disable-rpath \
+--enable-safe-mode \
+--enable-bcmath \
+--enable-shmop \
+--enable-sysvsem \
+--enable-inline-optimization \
+--with-curl \
+--with-curlwrappers \
+--enable-mbregex \
+--enable-fpm \
+--enable-mbstring \
+--with-mcrypt \
+--with-gd \
+--enable-gd-native-ttf \
+--with-openssl \
+--with-mhash \
+--enable-pcntl \
+--enable-sockets \
+--with-xmlrpc \
+--enable-zip \
+--enable-soap \
+--enable-short-tags \
+--enable-zend-multibyte \
+--enable-static \
+--with-xsl \
+--with-fpm-user=nginx \
+--with-fpm-group=nginx \
+--enable-ftp
+
+
+LNAP 的  PHP 编译参数
+
+./configure \
+--prefix=/application/php5.3.27 \
+--with-apxs2=/application/apache/bin/apxs \
+--with-mysql=mysqlnd \
+--with-pdo-mysql=mysqlnd \
+--with-iconv-dir=/usr/local/libiconv \
+--with-freetype-dir \
+--with-jpeg-dir \
+--with-png-dir \
+--with-zlib \
+--with-libxml-dir=/usr \
+--enable-xml \
+--disable-rpath \
+--enable-safe-mode \
+--enable-bcmath \
+--enable-shmop \
+--enable-sysvsem \
+--enable-inline-optimization \
+--with-curl \
+--with-curlwrappers \
+--enable-mbregex \
+--enable-mbstring \
+--with-mcrypt \
+--with-gd \
+--enable-gd-native-ttf \
+--with-openssl \
+--with-mhash \
+--enable-pcntl \
+--enable-sockets \
+--with-xmlrpc \
+--enable-zip \
+--enable-soap \
+--enable-short-tags \
+--enable-zend-multibyte \
+--enable-static \
+--with-xsl \
+--enable-ftp
+
+添加共享库(如果使用mysql)
+
+ln -s /application/mysql/lib/libmysqlclient.so.18 /usr/lib64/
+
+ touch ext/phar/phar.phar
+
+make && make install
+
+在/application下创建软连接
+
+ln -s php5.4.27/ php
+
+在/tools/php-5.4.27下拷贝默认配置文件
+
+cp php.ini-production  /application/php/lib/php.ini
+
+配置php服务的配置文件 php-fpm.conf
+
+在 /application/php/etc/目录下
+cp php-fpm.conf.default  php-fpm.conf
+
+开启 php 
+
+/application/php/sbin/php-fpm
+
+写入开机启动脚本
+
+ echo '/application/php/sbin/php-fpm'>>/etc/profile
+
+查看
+
+netstate -lntup|egrep 'php'
+lsof -i:3306
+
+配置nginx 测试php
+
+配置一个新的虚拟主机
+
+server {
+        listen       80;
+        server_name  www.lnmp.com;
+        location / {
+            root   html/php; 
+            index  index.html;
+        } 
+       location ~ .*\.(php|php5)?$ {
+
+            root   html/php;
+            fastcgi_pass  127.0.0.1:9000;
+            fastcgi_index index.php;        
+            include fastcgi.conf;
+       }
+    access_log logs/user_access.log main ; 
+    }
+
+后缀名为php  php5 的 会使用 php 解析。
+
+echo "<?php phpinfo(); ?>">>test_info.php
+
+测试数据库  是否 正确 链接。
+
+<?php
+   $linkid=mysql_connect('localhost','root','bestpay') or mysql_error();
+   if($linkid){
+    echo "mysql successful by lijinpeng!";
+                                          }
+   else
+        {
+           echo mysql_error();
+                                }
+?>
+
+这个是界面
+
+
+----搭建博客程序--------------------
+
+创建数据库和用户
+
+create database wordpress;
+
+
+查看用户
+select user();
+查看当前用户
+system whoami 
+
+查看所有用户
+
+select user,port from mysql.user;
+
+授权
+
+grant all on wordpress.* to wordpress@'localhost' identified by 'bestpay';
+
+查看用户对应的权限
+
+show grants for wordpress@'localhost' 
+
+使权限生效
+flush privileges;
+
+配置nginx
+
+新建虚拟主机
+
+server {
+        listen       80;
+        server_name  www.blog.com;
+        location / {
+            root   html/blog;
+            index  index.html index.php index.htm;
+        }
+       location ~ .*\.(php|php5)?$ {
+
+            root   html/php;
+            fastcgi_pass  127.0.0.1:9000;
+            fastcgi_index index.php;
+            include fastcgi.conf;
+       }
+    access_log logs/user_access.log main ;
+    }
+~             
+
+下载wordpress  安装 
+wget https://downloads.wordpress.org/release/zh_CN/wordpress-4.5.1.zip
+
+解压
+
+拷贝到/application/nginx/html/blog下
+
+授权
+chown -R www.www /application/nginx/html/blog/
+
+(如果不行  加777 权限)
+
+上传图片如果不行 添加数据库的值
+
+select * from old_options where option_name='upload_path'; 
+
+ update old_options set option_value='old-content/uploads' where option_name='upload_path';
+
+
+
+重新搭一台数据库服务其
+
+导出wordpress数据库备份 
+mysqldump -uroot -pbestpay wordpress -B|gzip>bak.sql.gz
+导入数据库
+mysql -uroot -pbestpay <bak.sql.gz
+
+在51 上进行授权  在.7 上可以访问
+
+grant all on wordpress to wordpress@'172.16.1.%' identified by 'bestpay'
+
+共享服务器实现共享目录
+
+
+使用相同的用户 www
+
+
+暂时不指定用户了
+all_squash,anonuid=888,anongid=888;
+
+
+
+LMAP框架搭建
+
+下载httpd（apache）
+
+wget http://archive.apache.org/dist/httpd/httpd-2.2.31.tar.gz
+
+
+解压
+
+tar -vxf httpd-2.2.31.tar.gz
+
+安装zlib zlib-devel
+
+yum install zlib zlib-devel -y
+
+
+设置环境
+
+
+./configure --prefix=/application/httpd2.2.31  -enable-deflate --enable-expires --enable-headers
+--enable-modules=most  --enable-so --with-mpm=worker --enable=rewrite
+
+编译安装
+
+make && make install
+
+
+进入/application 创建软连接
+
+ln -s httpd2.2.31/ apache
+
+
+创建站点目录
+
+mkdir bbs www blog
+
+
+apche 配置文件在conf/httpd.conf
+
+
+打开注释
+
+Include conf/extra/httpd-vhosts.conf
+
+
+编辑 conf/extra/https-vhosts.conf 文件
+
+<VirtualHost *:80>
+    ServerAdmin 957143335@qq.com
+    DocumentRoot "/application/httpd2.2.31/htdocs/www"
+    ServerName www.etiantian.org
+    ServerAlias etiantian.org
+    ErrorLog "logs/www.error.log"
+    CustomLog "logs/www.access.log" common
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerAdmin 957143335@qq.com
+    DocumentRoot "/application/httpd2.2.31/htdocs/bbs"
+    ServerName www.bbs.org
+    ServerAlias bbs.org
+    ErrorLog "logs/bbs.error.log"
+    CustomLog "logs/bbs.access.log" common
+</VirtualHost>
+
+
+<VirtualHost *:80>
+    ServerAdmin 957143335@qq.com
+    DocumentRoot "/application/httpd2.2.31/htdocs/blog"
+    ServerName www.blog.org
+    ServerAlias blog.org
+    ErrorLog "logs/blog.error.log"
+    CustomLog "logs/blog.access.log" common
+</VirtualHost>
+
+修改 conf/httpd.conf
+
+(98行) ServerName 127.0.0.1:80
+
+检查语法
+
+./bin/apachectl  -t
+
+启动
+
+./bin/apachectl  start
+
+优雅重启
+
+./bin/apachectl  graceful
+
+在其他机器的 /etc/hosts文件中配置域名解析
+
+
+172.16.1.8 web01  www.etiantian.org etiantian.org www.bbs.org bbs.org www.blog.org blog.org
+
+curl www.etiantian.com
+
+会发现 出现下载列表
+
+我们可以取消列目录的功能（conf/httpd.conf）
+
+ (145行)Options -Indexes FollowSymLinks
+创建首页文件
+[root@web01 apache]# echo 'I am apache  www page!'>>htdocs/www/index.html
+[root@web01 apache]# echo 'I am apache  bbs page!'>>htdocs/bbs/index.html
+[root@web01 apache]# echo 'I am apache  blog page!'>>htdocs/blog/index.html
+访问
+[root@web02 extra]# curl www.etiantian.org
+I am apache  www page!
+[root@web02 extra]# curl www.bbs.org      
+I am apache  bbs page!
+[root@web02 extra]# curl www.blog.org
+成功！
+
+
+安装php
+
+过程上面已经有了。 
+
+编辑apacha/conf/httpd.conf
+
+添加两行 使其支持php(311行)
+
+Addtype application/x-httpd-php .php .phtml
+Addtype application/x-httpd-php-source .phps
+
+修改用户  68行
+
+ User www
+ Group www
+新建用户
+
+groupadd www
+
+useradd  -s /sbin/nologin -g www -M www
+
+
+nginx 负载均衡
+
+准备两台负载均衡服务器
+
+lb01  lb02
+
+172.16.1.5  172.16.1.6
+
+简单配置
+
+
+配置幅度ip 实现高可用
+
+ip addr add 10.0.0.3/24 dev eth0 label eth0:0
+
+查看
+ip addr
+关闭网卡
+ifocnfig eth0:0:1 down
+安装keepalived
+
+yum install keeaplived -y
+
+
+
+
