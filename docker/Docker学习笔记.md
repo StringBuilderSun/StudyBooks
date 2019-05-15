@@ -251,7 +251,7 @@ docker inspect -f "{{ .Config.Env }}" e70228ba285
 
 #### load
 
-### 搭建LNMP网站
+### 案例：搭建LNMP网站
 
 1、拉取mysql镜像
 
@@ -315,3 +315,217 @@ docker run -itd --name lnmp_web --link lnmp_mysql:db -p 88:80 -v ~/workspace:/va
 ```
 
 连接成功就可以使用wordpress创建站点了。
+
+## 三、容器
+
+## 四、网络管理
+
+### 1、网络模式
+
+   docker支持五种网络模式
+
+- bridge 桥接网络
+
+  桥接网络是docker容器默认的网络模式，docker启动后会创建一个docker0网桥，并且会通过veth pair生成一对虚拟网卡，一端放入到docker容器中叫eth0，另一端放入到宿主机上并以veth+7位随机数命名，并将这个网络设备放入到coker0网桥中，网桥为容器分配一个IP，并将docker0网桥的IP设置为容器的默认网关，所有的容器默认都加入了docker0网桥，所以彼此间可以通信，同时在iptables添加SNAT转换网络IP，以便容器访问外网。
+
+- host
+
+  容器不会获得一个独立的network namespace，而是与宿主机共用一个。
+
+- none
+
+  为容器设置一个独立的network namespace，但不为容器的网络进行任何设置
+
+- container
+
+  与指定容器使用相同的network namespace，网络配置也是相同的
+
+- 自定义
+
+  自定义网桥，默认与bridge网络相同
+
+### 2、桥接宿主机网络与配置固定IP
+
+#### 桥接宿主机网络
+
+  首先安装网桥管理工具brctl
+
+```
+yum install bridge-utils -y
+
+```
+简单命令展示
+```powershell
+#显示宿主机上的所有网桥
+brctl show 
+#删除网桥
+brctl delbr bridge_name
+#添加一个网桥
+brctl addbr bridge_name
+#为网桥设置一个IP段
+ip addr add 0.0.0.0/24 bridge_name
+#启动网桥
+ip link set dev bridge_name up
+```
+
+由于docker会默认创建一个docker0网桥，网桥的ip为172.0.0.1/24 ，然后会为容器从这个ip段里分配ip，如果我们想通过网桥的方式指定容器的ip段，可以新创建一个指定ip段的网桥。
+
+方法一：
+
+不需要关闭docker服务
+
+```powershell
+#查看宿主机上的网桥
+brctl show 
+#关闭docker0网桥  如果存在的话
+ip link set dev docker0 down
+#删除当前的docker0网桥 如果存在的话
+brctl delbr docker0
+```
+
+修改 `/etc/docker/daemon.json`，由于daemon.json 文件在docker安装时并不存在，如果不存在需要新建改文件：
+
+```powershell
+#编辑配置文件，加入下面内容
+vim /etc/docker/daemon.json
+{
+  "bip": "192.162.0.1/24"
+}
+#重启docker服务
+systemctl restart docker
+#查看网桥
+brctl show
+#启动容器
+docker run -itd --name centos_host centos
+#查看此时容器的ip
+docker inspect centos_host
+```
+
+方法二：
+
+关闭docker服务，直接通过命令创建
+
+```powershell
+#添加网桥
+brctl addbr bridge0
+#设置网桥的ip
+ip addr add 202.0.0.1/16 dev bridge0
+#启动网桥
+ip link set dev bridge0 up
+```
+
+修改 `/etc/docker/daemon.json`
+
+```powershell
+#编辑配置文件，加入下面内容
+vim /etc/docker/daemon.json
+{ 
+     "bridge": "bridge0", 
+ }
+ #启动docker服务
+ service docker start
+ #查看网桥
+ brctl show
+ #启动容器
+ docker run -itd --name centos_host1 centos
+ #查看此时容器的ip
+ docker inspect centos_host1
+```
+
+#### 配置固定IP
+
+配置固定ip之前，我们需要用ip相关命令，查看下面命令
+
+ip netns相关命令
+
+1.增加虚拟网络命名空间
+
+```powershell
+#该命令会在/var/run/netns目录下创建ns网络命名空间名
+ip netns add ns
+```
+
+
+2.显示所有的虚拟网络命名空间
+
+```powershell
+ip netns list
+#也可通过查看/var/run/netns目录下的文件来list，结果一样
+ls /var/run/netns/
+```
+
+3.进入虚拟机网络环境
+
+```powershell
+#打开虚拟网络环境ns的bash窗口
+ip netns exec ns bash 
+#显示所有虚拟网络环境的设备
+ip addr
+#退出该网络虚拟环境
+exit
+```
+
+4.增加一对veth虚拟网卡
+
+```powershell
+ ip link add veth1 type veth peer name vp1
+```
+
+5.将veth1添加到ns虚拟网络环境
+
+```powershell
+ip link set veth1 netns ns
+```
+
+6.将虚拟网卡veth1改名并添加到net虚拟网络环境中
+
+```powershell
+ip link set dev veth1 name docker_veth netns net
+```
+
+7、将网桥关联到网卡 docker0网桥  docker_veth 虚拟网卡
+
+```
+brctl addif docker0 docker_veth
+```
+
+8.设置虚拟网络环境ns的docker_veth设备处于激活状态
+
+```powershell
+ip netns exec ns ip link set docker_veth up
+```
+
+9.为虚拟网络环境ns的docker_veth设备增加IP地址
+
+```powershell
+ip netns exec ns ip address add 10.0.1.1/24 dev docker_veth
+```
+
+使用pipework
+
+```powershell
+#从git拉去代码 如果没有git 使用 yum install git -y 安装
+git clone https://github.com/jpetazzo/pipework.git
+```
+
+```powershell
+#将pipework可执行文件放到用户目录下
+cp pipework/pipework /usr/local/bin/
+```
+
+```powershell
+#启动一个暂时不需要网络的容器
+docker run -itd --net=none  --name centos_pipework centos:li  
+```
+
+```powershell
+#为容器通过pipework配置网络
+pipework docker0 centos_pipework 192.162.0.1/24@192.162.0.100
+```
+
+
+
+
+### 3、容器SSL连接
+
+## 
