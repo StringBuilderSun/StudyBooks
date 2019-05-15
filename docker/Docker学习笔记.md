@@ -1,4 +1,4 @@
-# Docker学习笔记
+Docker学习笔记
 
 ## 一、docker的安装
 
@@ -320,33 +320,43 @@ docker run -itd --name lnmp_web --link lnmp_mysql:db -p 88:80 -v ~/workspace:/va
 
 ## 四、网络管理
 
-### 1、网络模式
+### 4.1 网络模式
 
    docker支持五种网络模式
 
-- bridge 桥接网络
+#### 4.1.1 bridge 桥接网络
 
-  桥接网络是docker容器默认的网络模式，docker启动后会创建一个docker0网桥，并且会通过veth pair生成一对虚拟网卡，一端放入到docker容器中叫eth0，另一端放入到宿主机上并以veth+7位随机数命名，并将这个网络设备放入到coker0网桥中，网桥为容器分配一个IP，并将docker0网桥的IP设置为容器的默认网关，所有的容器默认都加入了docker0网桥，所以彼此间可以通信，同时在iptables添加SNAT转换网络IP，以便容器访问外网。
+桥接网络是docker容器默认的网络模式，docker启动后会创建一个docker0网桥，并且会通过veth pair生成一对虚拟网卡，一端放入到docker容器中叫eth0，另一端放入到宿主机上并以veth+7位随机数命名，并将这个网络设备放入到coker0网桥中，网桥为容器分配一个IP，并将docker0网桥的IP设置为容器的默认网关，所有的容器默认都加入了docker0网桥，所以彼此间可以通信，同时在iptables添加SNAT转换网络IP，以便容器访问外网。
 
-- host
+#### 4.1.2 host
 
-  容器不会获得一个独立的network namespace，而是与宿主机共用一个。
+容器不会获得一个独立的network namespace，而是与宿主机共用一个。
 
-- none
+#### 4.1.3 none
 
-  为容器设置一个独立的network namespace，但不为容器的网络进行任何设置
+为容器设置一个独立的network namespace，但不为容器的网络进行任何设置
 
-- container
+#### 4.1.4 container
 
-  与指定容器使用相同的network namespace，网络配置也是相同的
+与指定容器使用相同的network namespace，网络配置也是相同的
 
-- 自定义
+#### 4.1.5 自定义
 
-  自定义网桥，默认与bridge网络相同
+自定义网桥，默认与bridge网络相同
 
-### 2、桥接宿主机网络与配置固定IP
+### 4.2、桥接宿主机与配置固定IP
 
-#### 桥接宿主机网络
+下面的内容都是通过ip命令执行的，如果本机中没有ip，请安装iproute
+
+```powershell
+yum install iproute -y
+```
+
+
+
+#### 4.2.1 桥接宿主机网络
+
+##### 4.2.1.1 安装brctl
 
   首先安装网桥管理工具brctl
 
@@ -370,7 +380,7 @@ ip link set dev bridge_name up
 
 由于docker会默认创建一个docker0网桥，网桥的ip为172.0.0.1/24 ，然后会为容器从这个ip段里分配ip，如果我们想通过网桥的方式指定容器的ip段，可以新创建一个指定ip段的网桥。
 
-方法一：
+##### 4.2.1 .2 方法一
 
 不需要关闭docker服务
 
@@ -401,9 +411,9 @@ docker run -itd --name centos_host centos
 docker inspect centos_host
 ```
 
-方法二：
+##### 4.2.1.3 方法二
 
-关闭docker服务，直接通过命令创建
+关闭docker服，直接通过命令创建
 
 ```powershell
 #添加网桥
@@ -432,11 +442,11 @@ vim /etc/docker/daemon.json
  docker inspect centos_host1
 ```
 
-#### 配置固定IP
+#### 4.2.2 配置固定IP
 
 配置固定ip之前，我们需要用ip相关命令，查看下面命令
 
-ip netns相关命令
+##### 4.2.2.1 netns相关命令
 
 1.增加虚拟网络命名空间
 
@@ -444,7 +454,6 @@ ip netns相关命令
 #该命令会在/var/run/netns目录下创建ns网络命名空间名
 ip netns add ns
 ```
-
 
 2.显示所有的虚拟网络命名空间
 
@@ -501,7 +510,40 @@ ip netns exec ns ip link set docker_veth up
 ip netns exec ns ip address add 10.0.1.1/24 dev docker_veth
 ```
 
-使用pipework
+##### 4.2.2.2 脚本实例
+
+以下是通过脚本生成一个虚拟网卡，并将虚拟网卡加入到docker0网桥，并分配固定IP的过程
+
+```shell
+#开启一个容器并获取开启后容器的ID
+C_ID=$(docker run -itd --net=none --name centos_staticIp centos:li)
+#获取开启后容器的PID
+C_PID=$(docker inspect -f '{{.State.Pid}}' $C_ID)
+# 创建network namespace目录并将容器的network namespace软连接到此目录，以便ip netns命令读取
+mkdir -p /var/run/netns
+ln -s /proc/$C_PID/ns/net /var/run/netns/$C_PID
+# 添加虚拟网卡veth+容器PID，类型是veth pair，名称是vp+容器PID
+ip link add veth$C_PID type veth peer name vp$C_PID
+# 添加虚拟网卡到docker0网桥
+brctl addif docker0 veth$C_PID
+# 激活虚拟网卡
+ip link set veth$C_PID up
+# 设置容器网络信息
+IP='192.162.0.123/24'
+GW='192.162.0.1'
+# 给进程配置一个network namespace
+#ip netns add $C_PID
+ip link set vp$C_PID netns $C_PID
+# 在容器进程里面设置网卡信息
+ip netns exec $C_PID ip link set dev vp$C_PID name eth0
+ip netns exec $C_PID ip link set eth0 up
+ip netns exec $C_PID ip addr add $IP dev eth0
+ip netns exec $C_PID ip route add default via $GW
+```
+
+##### 4.2.2.3 使用pipework
+
+如果上诉过程很麻烦，可以使用pipework
 
 ```powershell
 #从git拉去代码 如果没有git 使用 yum install git -y 安装
@@ -520,7 +562,7 @@ docker run -itd --net=none  --name centos_pipework centos:li
 
 ```powershell
 #为容器通过pipework配置网络
-pipework docker0 centos_pipework 192.162.0.1/24@192.162.0.100
+pipework docker0 centos_pipework 192.162.0.100/24@192.162.0.1
 ```
 
 
