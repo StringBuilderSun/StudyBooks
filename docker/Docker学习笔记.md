@@ -565,7 +565,28 @@ docker run -itd --net=none  --name centos_pipework centos:li
 pipework docker0 centos_pipework 192.162.0.100/24@192.162.0.1
 ```
 
-
 ### 3、容器SSL连接
 
-## 
+#### 3.1、安装SSL
+
+为容器安装openssl，以便于允许通过shell或者CRT等外部工具登录访问
+
+```powershell
+#启动一个centos6的docker容器
+docker run -itd --net=none --name centos_ssl centos6:li 
+#配置容器的网络
+pipework docker0 centos_ssl  192.162.0.99/24@192.162.0.1 
+#进入容器
+docker attach centos_ssl
+#安装ssl服务
+yum install openssh-server -y
+#设置初始密码
+passwd
+#启动ssh服务
+/etc/init.d/sshd start
+#将该容器生成一个镜像 里面会包含ssh
+docker commit centos_ssl  centos_ssl:li
+#启动一个安装了ssl的容器
+ docker run -itd  -p 23:22 --net=none --name docker_ssl  centos_ssl    
+```
+
